@@ -30,6 +30,8 @@
 #include <QStyledItemDelegate>
 #include <QWindow>
 
+#include <iostream>
+
 #include "gui/Icons.h"
 #include "gui/SortFilterHideProxyModel.h"
 
@@ -120,6 +122,23 @@ EntryView::EntryView(QWidget* parent)
         m_columnActions->addAction(action);
     }
     connect(m_columnActions, SIGNAL(triggered(QAction*)), this, SLOT(toggleColumnVisibility(QAction*)));
+
+    // "Additional attributes" submenu, populated dynamically from the open database's
+    // custom attribute keys (see updateAdditionalAttributeColumns()).
+    m_additionalAttributesMenu = m_headerMenu->addMenu(tr("Additional attributes"));
+    m_additionalAttributesMenu->menuAction()->setVisible(false);
+    // Cap it at roughly 10 visible rows and let the rest scroll instead of overflowing.
+    // m_additionalAttributesMenu->setStyleSheet(QStringLiteral("QMenu { menu-scrollable: 1; }"));
+    // m_additionalAttributesMenu->setMaximumHeight(10 * (fontMetrics().height() + 8));
+
+    // Non-exclusive group purely to get a triggered(QAction*) signal we can connect once;
+    // individual actions are (re)created dynamically in updateAdditionalAttributeColumns().
+    m_additionalAttributeActions = new QActionGroup(this);
+    m_additionalAttributeActions->setExclusive(false);
+    connect(m_additionalAttributeActions,
+            SIGNAL(triggered(QAction*)),
+            this,
+            SLOT(toggleAdditionalAttributeColumnVisibility(QAction*)));
 
     m_headerMenu->addSeparator();
     m_headerMenu->addAction(tr("Fit to window"), this, SLOT(fitColumnsToWindow()));
@@ -217,6 +236,7 @@ void EntryView::displayGroup(Group* group)
     header()->hideSection(EntryModel::ParentGroup);
     setFirstEntryActive();
     m_inSearchMode = false;
+    updateAdditionalAttributeColumns();
 }
 
 void EntryView::displaySearch(const QList<Entry*>& entries)
@@ -231,6 +251,7 @@ void EntryView::displaySearch(const QList<Entry*>& entries)
     sortByColumn(EntryModel::ParentGroup, Qt::AscendingOrder);
 
     m_inSearchMode = true;
+    updateAdditionalAttributeColumns();
 }
 
 void EntryView::setFirstEntryActive()
@@ -312,6 +333,11 @@ QModelIndex EntryView::indexFromEntry(Entry* entry)
     return m_sortModel->mapFromSource(m_model->indexFromEntry(entry));
 }
 
+QString EntryView::additionalAttributeKey(int column) const
+{
+    return m_model->additionalAttributeKey(column);
+}
+
 int EntryView::currentEntryIndex()
 {
     QModelIndexList list = selectionModel()->selectedRows();
@@ -340,6 +366,19 @@ bool EntryView::setViewState(const QByteArray& state)
     header()->setSortIndicator(-1, Qt::AscendingOrder);
     bool status = header()->restoreState(state);
     resetFixedColumns();
+
+    // Additional attribute columns are intentionally not persisted across sessions - they're
+    // database-specific and dynamic. restoreState() above has no knowledge of them and
+    // defaults any section it doesn't recognize to visible, so force them back to hidden
+    // here; otherwise every additional attribute column would show up already visible the
+    // moment a database is opened.
+    if (m_additionalAttributeActions) {
+        const QSignalBlocker blocker(m_additionalAttributeActions);
+        for (QAction* action: m_additionalAttributeActions->actions()) {
+            action->setChecked(false);
+            header()->hideSection(action->data().toInt());
+        }
+    }
     m_columnsNeedRelayout = state.isEmpty();
     onHeaderChanged();
     return status;
@@ -361,6 +400,13 @@ void EntryView::showHeaderMenu(const QPoint& position)
         action->setChecked(!isColumnHidden(columnIndex));
     }
     actions[EntryModel::ParentGroup]->setVisible(inSearchMode());
+
+    // Keep the "Additional attributes" submenu in sync with the actual header state
+    const QList<QAction*> additionalAttributeActions = m_additionalAttributesMenu->actions();
+    for (auto& action : additionalAttributeActions) {
+        int columnIndex = action->data().toInt();
+        action->setChecked(!isColumnHidden(columnIndex));
+    }
 
     m_headerMenu->popup(mapToGlobal(position));
 }
@@ -398,6 +444,71 @@ void EntryView::toggleColumnVisibility(QAction* action)
         return;
     }
     action->setChecked(true);
+}
+ 
+/**
+ * Toggle visibility of an additional attribute column referenced by the triggering action,
+ * and persist the choice by attribute name (column indices aren't stable across databases).
+ */
+void EntryView::toggleAdditionalAttributeColumnVisibility(QAction* action)
+{
+    int columnIndex = action->data().toInt();
+
+    if (action->isChecked()) {
+        header()->showSection(columnIndex);
+        if (header()->sectionSize(columnIndex) == 0) {
+            header()->resizeSection(columnIndex, header()->defaultSectionSize());
+        }
+        resetFixedColumns();
+        return;
+    }
+    if ((header()->count() - header()->hiddenSectionCount()) > 1) {
+        header()->hideSection(columnIndex);
+        return;
+    }
+    // At least one column must remain visible
+    action->setChecked(true);
+}
+
+/**
+ * (Re)build the "Additional attributes" submenu from the database's current custom
+ * attribute keys. No-op if the key list hasn't actually changed, e.g. when merely
+ * switching between groups of the same database (customAttributeKeys() only changes
+ * on database load/save).
+ */
+void EntryView::updateAdditionalAttributeColumns()
+{
+    if (!m_additionalAttributesMenu) {
+        return;
+    }
+
+    const QStringList attributeKeys = m_model->additionalAttributeKeys();
+
+    std::cout << "updateAdditionalAttributeColumns : attributeKeys : " << attributeKeys.join(" ").toStdString() << std::endl;
+
+    if (attributeKeys == m_lastAdditionalAttributeKeys) {
+        // Key list unchanged (e.g. just switched to another group of the same database) -
+        // leave the existing columns/menu state alone.
+        return;
+    }
+    m_lastAdditionalAttributeKeys = attributeKeys;
+
+    qDeleteAll(m_additionalAttributesMenu->actions());
+
+    // New key list (different database, or attributes changed since last save/load) -
+    // every additional attribute column starts hidden; the user opts in for this session.
+     for (int i = 0; i < attributeKeys.size(); ++i) {
+        int columnIndex = EntryModel::FirstAdditionalAttribute + i;
+
+        auto action = m_additionalAttributesMenu->addAction(attributeKeys.at(i));
+        action->setCheckable(true);
+        action->setData(columnIndex);
+        m_additionalAttributeActions->addAction(action);
+
+        header()->hideSection(columnIndex);
+    }
+
+    m_additionalAttributesMenu->menuAction()->setVisible(!attributeKeys.isEmpty());
 }
 
 /**
@@ -487,6 +598,16 @@ void EntryView::resetViewToDefaults()
     header()->hideSection(EntryModel::PasswordStrength);
     header()->hideSection(EntryModel::Color);
     header()->hideSection(EntryModel::ParentGroupPath);
+
+    // Hide all additional attribute columns
+    if (m_additionalAttributesMenu) {
+        const QList<QAction*> additionalAttributeActions = m_additionalAttributesMenu->actions();
+        for (auto& action : additionalAttributeActions) {
+            action->setChecked(false);
+            header()->hideSection(action->data().toInt());
+        }
+    }
+
     onHeaderChanged();
 
     // Reset column order to logical indices

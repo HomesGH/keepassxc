@@ -24,6 +24,7 @@
 #include <QPalette>
 
 #include "core/Clock.h"
+#include "core/Database.h"
 #include "core/Entry.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
@@ -74,6 +75,8 @@ void EntryModel::setGroup(Group* group)
 
     makeConnections(group);
 
+    refreshAdditionalAttributeKeys(group->database());
+
     endResetModel();
 }
 
@@ -98,6 +101,8 @@ void EntryModel::setEntries(const QList<Entry*>& entries)
         makeConnections(group);
     }
 
+    refreshAdditionalAttributeKeys(entries.isEmpty() ? nullptr : entries.first()->database());
+
     endResetModel();
 }
 
@@ -117,7 +122,7 @@ int EntryModel::columnCount(const QModelIndex& parent) const
         return 0;
     }
 
-    return 17;
+    return FirstAdditionalAttribute + m_additionalAttributeKeys.size();
 }
 
 QVariant EntryModel::data(const QModelIndex& index, int role) const
@@ -131,6 +136,27 @@ QVariant EntryModel::data(const QModelIndex& index, int role) const
 
     if (role == Qt::DisplayRole) {
         QString result;
+
+        if (index.column() >= FirstAdditionalAttribute) {
+            const QString key = additionalAttributeKey(index.column());
+            if (!key.isEmpty() && attr->hasKey(key)) {
+                const QString value = attr->value(key);
+                if (value.isEmpty()) {
+                    // Don't show masked dots for an attribute that is genuinely empty
+                    result = "";
+                } else if (attr->isProtected(key) && config()->get(Config::GUI_HidePasswords).toBool()) {
+                    // Protected additional attributes are hidden/revealed exactly like passwords
+                    result = EntryModel::HiddenContentDisplay;
+                } else {
+                    result = entry->resolveMultiplePlaceholders(value);
+                }
+                if (attr->isReference(key)) {
+                    result.prepend(tr("Ref: ", "Reference abbreviation"));
+                }
+            }
+            return result;
+        }
+
         switch (index.column()) {
         case ParentGroup:
             if (entry->group()) {
@@ -370,6 +396,13 @@ QVariant EntryModel::headerData(int section, Qt::Orientation orientation, int ro
 {
     Q_UNUSED(orientation);
 
+    if (section >= FirstAdditionalAttribute) {
+        if (role == Qt::DisplayRole || role == Qt::ToolTipRole) {
+            return additionalAttributeKey(section);
+        }
+        return {};
+    }
+
     if (role == Qt::DisplayRole) {
         switch (section) {
         case ParentGroup:
@@ -594,6 +627,11 @@ void EntryModel::onConfigChanged(Config::ConfigKey key)
         break;
     case Config::GUI_HidePasswords:
         emit dataChanged(index(0, Password), index(rowCount() - 1, Password), {Qt::DisplayRole});
+        // Protected additional attributes are hidden/revealed together with passwords
+        if (columnCount() > FirstAdditionalAttribute) {
+            emit dataChanged(
+                index(0, FirstAdditionalAttribute), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole});
+        }
         break;
     default:
         break;
@@ -626,4 +664,22 @@ void EntryModel::makeConnections(const Group* group)
 void EntryModel::setBackgroundColorVisible(bool visible)
 {
     m_backgroundColorVisible = visible;
+}
+
+const QStringList& EntryModel::additionalAttributeKeys() const
+{
+    return m_additionalAttributeKeys;
+}
+
+QString EntryModel::additionalAttributeKey(int column) const
+{
+    if (column < FirstAdditionalAttribute) {
+        return {};
+    }
+    return m_additionalAttributeKeys.value(column - FirstAdditionalAttribute);
+}
+
+void EntryModel::refreshAdditionalAttributeKeys(Database* db)
+{
+    m_additionalAttributeKeys = db ? db->customAttributeKeys() : QStringList();
 }

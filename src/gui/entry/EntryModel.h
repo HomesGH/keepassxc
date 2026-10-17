@@ -24,6 +24,7 @@
 
 #include "core/Config.h"
 
+class Database;
 class Entry;
 class Group;
 
@@ -50,7 +51,10 @@ public:
         Size = 13,
         PasswordStrength = 14,
         Color = 15,
-        ParentGroupPath = 16
+        ParentGroupPath = 16,
+        // Additional (custom) attribute columns are appended dynamically starting here;
+        // there may be zero or more of them depending on the open database.
+        FirstAdditionalAttribute = 17
     };
 
     explicit EntryModel(QObject* parent = nullptr);
@@ -70,6 +74,11 @@ public:
     void setGroup(Group* group);
     void setEntries(const QList<Entry*>& entries);
     void setBackgroundColorVisible(bool visible);
+    // Custom attribute keys currently exposed as columns beyond FirstAdditionalAttribute,
+    // in the same (alphabetical) order as Database::customAttributeKeys().
+    const QStringList& additionalAttributeKeys() const;
+    // Attribute key backing the given column, or an empty string if it isn't one.
+    QString additionalAttributeKey(int column) const;
 
 private slots:
     void entryAboutToAdd(Entry* entry);
@@ -87,12 +96,14 @@ private slots:
 private:
     void severConnections();
     void makeConnections(const Group* group);
+    void refreshAdditionalAttributeKeys(Database* db);
 
     bool m_backgroundColorVisible = true;
     Group* m_group;
     QList<Entry*> m_entries;
     QList<Entry*> m_orgEntries;
     QSet<const Group*> m_allGroups;
+    QStringList m_additionalAttributeKeys;
 
     const QString HiddenContentDisplay;
 };

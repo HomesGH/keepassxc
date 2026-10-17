@@ -52,6 +52,8 @@ public:
     void displayGroup(Group* group);
     void displaySearch(const QList<Entry*>& entries);
 
+    QString additionalAttributeKey(int column) const;
+
 signals:
     void entryActivated(Entry* entry, EntryModel::ModelColumn column);
     void entrySelectionChanged(Entry* entry);
@@ -67,6 +69,7 @@ private slots:
     void emitEntryActivated(const QModelIndex& index);
     void showHeaderMenu(const QPoint& position);
     void toggleColumnVisibility(QAction* action);
+    void toggleAdditionalAttributeColumnVisibility(QAction* action);
     void fitColumnsToWindow();
     void fitColumnsToContents();
     void resetViewToDefaults();
@@ -78,6 +81,7 @@ private:
     void resetFixedColumns();
     bool isColumnHidden(int logicalIndex);
     void onHeaderChanged();
+    void updateAdditionalAttributeColumns();
 
     EntryModel* const m_model;
     SortFilterHideProxyModel* const m_sortModel;
@@ -88,6 +92,9 @@ private:
 
     QMenu* m_headerMenu;
     QActionGroup* m_columnActions;
+    QMenu* m_additionalAttributesMenu = nullptr;
+    QActionGroup* m_additionalAttributeActions = nullptr;
+    QStringList m_lastAdditionalAttributeKeys;
 };
 
 #endif // KEEPASSX_ENTRYVIEW_H

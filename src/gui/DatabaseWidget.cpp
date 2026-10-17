@@ -1538,6 +1538,19 @@ void DatabaseWidget::entryActivationSignalReceived(Entry* entry, EntryModel::Mod
         return;
     }
 
+    // Implement 'copy-on-doubleclick' functionality for additional attribute columns,
+    // exactly the same way it already works for Username/Password
+    if (column >= EntryModel::FirstAdditionalAttribute) {
+        QString key = m_entryView->additionalAttributeKey(column);
+        if (!key.isEmpty() && entry->attributes()->hasKey(key)
+            && config()->get(Config::Security_EnableCopyOnDoubleClick).toBool()) {
+            setClipboardTextAndMinimize(entry->resolveMultiplePlaceholders(entry->attributes()->value(key)));
+        } else {
+            switchToEntryEdit(entry);
+        }
+        return;
+    }
+
     // Implement 'copy-on-doubleclick' functionality for certain columns
     switch (column) {
     case EntryModel::Username:
